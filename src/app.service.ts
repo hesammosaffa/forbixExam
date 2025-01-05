@@ -1,47 +1,78 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { User } from './user.model';
 import { Model } from 'mongoose';
+import { User } from './user.model';
 import { Company } from './company.model';
+import { CreateUserDto } from './dto/create-user.dto';
 
 @Injectable()
 export class AppService {
+  private readonly logger = new Logger(AppService.name);
+
   constructor(
-    @InjectModel('user') private userModel: Model<User>,
-    @InjectModel('company') private companyModel: Model<Company>,
+    @InjectModel('User') private userModel: Model<User>,
+    @InjectModel('Company') private companyModel: Model<Company>,
   ) {}
 
-  async getUser(req, res) {
-    const user: any = await this.userModel.find({ _id: req.params.id });
-    user[0].companies = await this.companyModel.find({ userId: req.params.id });
-    res.status(200).json(user[0]);
+  async getUser(id: string) {
+    this.logger.log(`Fetching user with id: ${id}`);
+    const user = await this.userModel.findById(id).exec();
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+    user['companies'] = await this.companyModel.find({ userId: id }).exec();
+    return user;
   }
 
-  async createUser(req, res) {
-    if (!req.body.name) {
-      res.status(400);
-      return;
+  async createUser(createUserDto: CreateUserDto) {
+    this.logger.log(`Creating user with email: ${createUserDto.email}`);
+    const { name, email } = createUserDto;
+    if (!name || !email) {
+      throw new BadRequestException('Name and email are required');
     }
 
-    if (!req.body.email) {
-      res.status(400);
-      return;
-    }
-
-    const user = new this.userModel(req.body);
+    const user = new this.userModel(createUserDto);
     await user.save();
 
-    await sendHelloEmail(user);
+    await this.sendHelloEmail(user);
 
-    const company = new this.companyModel(req.body);
+    const company = new this.companyModel({ userId: user._id, name });
     await company.save();
 
-    res.status(201).json(user);
+    return user;
   }
-}
 
-async function sendHelloEmail(user) {
-  // this is a mock function that runs a long process
-  console.log(user);
-  await new Promise((resolve) => setTimeout(resolve, 3000));
+  async deleteUser(id: string) {
+    this.logger.log(`Deleting user with id: ${id}`);
+    const user = await this.userModel.findByIdAndDelete(id).exec();
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+    await this.companyModel.deleteMany({ userId: id }).exec();
+    return { message: 'User and associated companies deleted successfully' };
+  }
+
+  async updateUser(id: string, updateUserDto: Partial<CreateUserDto>) {
+    this.logger.log(`Updating user with id: ${id}`);
+    const user = await this.userModel.findByIdAndUpdate(id, updateUserDto, { new: true }).exec();
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+    return user;
+  }
+
+  async getAllUsers() {
+    this.logger.log('Fetching all users');
+    const users = await this.userModel.find().exec();
+    for (const user of users) {
+      user['companies'] = await this.companyModel.find({ userId: user._id }).exec();
+    }
+    return users;
+  }
+
+  private async sendHelloEmail(user: User) {
+    this.logger.log(`Sending hello email to user: ${user.email}`);
+    console.log(user);
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+  }
 }
